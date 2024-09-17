@@ -1,8 +1,16 @@
 import asyncio
 import aiohttp
 import schedule
-from model import update_price, Base, engine, log_to_csv
+from model import update_price, Base, engine, log_to_csv, Coins, session
 from mail import send_email
+from pydantic import BaseModel
+from typing import List
+from fastapi import FastAPI, HTTPException
+from sqlalchemy.future import select
+from typing import Dict, Any, Optional
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
+
 
 savings = 3
 main_coin_from = 'BTC'
@@ -95,9 +103,9 @@ def main_program():
             dict_data[f"BTC{elem}"] = max(dict_data[f"BTC{elem}"])
         print(dict_data)
         for key in dict_data.keys():
-            data = update_price(key, dict_data[key], dict_data[key]*3)
+            data = asyncio.run(update_price(key, dict_data[key], dict_data[key]*3))
             if data:
-                f.write(data)
+                f.write(str(data))
             log_to_csv(key)
         for elem in coins_to:
             dict_data[f"BTC{elem}"] = []
@@ -112,9 +120,86 @@ def main_program():
 
 schedule.every(10).seconds.do(main_program)
 
+app = FastAPI()
+
+class BaseView(BaseModel):
+    title: Optional[str]
+    price: Optional[float]
+    max_price: Optional[float]
+    min_price: Optional[float]
+    difference: Optional[float]
+    total_amount: Optional[float]
+
+@app.on_event("startup")
+async def startup():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+@app.on_event("shutdown")
+async def shutdown():
+    await session.close()
+    await engine.dispose()
+
+
+#GET-запрос для получения списка всех валютных пар
+@app.get("/currency", response_model=List[BaseView])
+async def get_currencies() -> List[BaseView]:
+    async with session.begin():
+        res = await session.execute(select(Coins))
+    coins = res.scalars().all()
+    base_views = [BaseView(**jsonable_encoder(coin)) for coin in coins]
+    return base_views
+
+#GET-запрос для получения данных конкретной валютной пары
+@app.get("/currency/{title}", response_model=List[BaseView])
+async def get_currency(title: str) -> List[BaseView]:
+    async with session.begin():
+        res = await session.execute(select(Coins).where(Coins.title == title))
+    coins = res.scalars().all()
+    base_views = [BaseView(**jsonable_encoder(coin)) for coin in coins]
+    return base_views
+
+
+
+# PATCH-запрос для обновления данных валютной пары
+@app.patch("/currency/{title}", response_model=BaseView)
+async def update_currency(title: str, coin: BaseView):
+    # Получение данных о валютной паре с помощью GET-запроса
+    async with async_session() as session:
+        stmt = select(Coins).where(Coins.title == title)
+        currency = await session.execute(stmt).first()
+    if currency is None:
+        raise HTTPException(status_code=404, detail="Валютная пара не найдена")
+    # Изменение нужных полей в данных
+    if coin.price:
+        update_price(title, BaseView.price, BaseView.price*3)
+    if coin.title:
+        currency.title = BaseView.title
+
+    # Сохранение изменений в базе данных
+    session.commit()
+    return {"message": "Данные успешно обновлены"}
+
+
+@app.delete("/currency/{title}", response_model=BaseView)
+async def delete_currency(title: str):
+    # Получение данных о валютной паре с помощью GET-запроса
+    async with async_session() as session:
+        stmt = select(Coins).where(Coins.title == title)
+        currency = await session.execute(stmt).first()
+    if currency is None:
+        raise HTTPException(status_code=404, detail="Валютная пара не найдена")
+
+    # Удаление данных валютной пары
+    async with async_session() as session:
+        stmt = delete(Coins).where(Coins.title == title)
+        await session.execute(stmt)
+        await session.commit()
+
+    return {"message": "Данные успешно удалены"}
+
+
 if __name__ == '__main__':
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
     while True:
         schedule.run_pending()
 

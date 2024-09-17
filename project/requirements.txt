@@ -4,4 +4,5 @@ uvicorn==0.30.6
 schedule==1.2.2
 SQLAlchemy==2.0.34
 psycopg2-binary
+asyncpg
 

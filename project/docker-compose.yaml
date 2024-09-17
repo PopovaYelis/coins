@@ -4,7 +4,7 @@ services:
   app:
     build: .
     environment:
-      DB_URL: postgresql://admin:admin@database:5432/admin
+      DB_URL: postgresql+asyncpg://admin:admin@database:5432/admin
     depends_on:
       - postgres
     restart: always
@@ -16,7 +16,7 @@ services:
     container_name: fastapi
     build: .
     ports:
-      - '5000:5000'
+      - '5050:5050'
     networks:
       - backend
 

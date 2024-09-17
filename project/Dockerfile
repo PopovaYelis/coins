@@ -7,6 +7,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-CMD ["python", "shed.py"]
 
+CMD (uvicorn shed:app --host 0.0.0.0 --port 5050 &) && python shed.py
 

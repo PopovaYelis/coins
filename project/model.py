@@ -4,17 +4,18 @@ from sqlalchemy import Column, Integer, String, \
     create_engine, Identity, DateTime, Float
 from sqlalchemy.future import select
 from sqlalchemy.orm import sessionmaker, declarative_base
-from flask import Flask, jsonify
 from typing import Dict, Any
 import csv
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 
 
-
-app = Flask(__name__)
-engine = create_engine('postgresql+psycopg2://admin:admin@database:5432/admin')
+engine = create_async_engine('postgresql+asyncpg://admin:admin@database:5432/admin', echo=True)
+async_session = sessionmaker(
+    engine, expire_on_commit=False, class_=AsyncSession
+)
+session = async_session()
 Base = declarative_base()
 Session = sessionmaker(bind=engine)
-session = Session()
 
 
 class Coins(Base):
@@ -37,9 +38,10 @@ class Coins(Base):
         return {c.name: getattr(self, c.name) for c in
                 self.__table__.columns}
 
-def log_to_csv(title: str):
-    data =  session.query(Coins).filter(Coins.title == title).one_or_none()
-
+async def log_to_csv(title: str):
+    async with async_session() as session:
+        stmt = select(Coins).where(Coins.title == title)
+        data = await session.execute(stmt).first()
     if data:
         with open('currency_data.csv', mode='a', newline='') as file:
             writer = csv.writer(file)
@@ -76,12 +78,13 @@ def get_currency_data_json(title: str):
     else:
         return json.dumps({"error": "No data found"}, indent=4)
 
-
 def update_price(title: str, new_price: float, total_amount: float):
     # Ищем запись с таким же заголовком (названием валютной пары)
-    data =  session.query(Coins).filter(Coins.title == title).one_or_none()
+    with engine.begin() as conn:
+        stmt = select([Coins]).order_by(Coins.timestamp.desc()).limit(1)
+        result = conn.execute(stmt)
+        data = result.fetchone()
     res = ''
-
     if data:
         difference = new_price - data.price
         if new_price >= data.min_price + data.min_price * 0.00003:
