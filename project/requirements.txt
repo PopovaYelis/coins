@@ -1,0 +1,8 @@
+aiohttp==3.10.5
+tortoise-orm==0.21.6
+flask
+schedule==1.2.2
+gunicorn==23.0.0
+SQLAlchemy==2.0.34
+psycopg2-binary
+
