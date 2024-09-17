@@ -10,6 +10,7 @@ from sqlalchemy.future import select
 from typing import Dict, Any, Optional
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from config import X_CMC_PRO_API_KEY, email_list
 
 
 savings = 3
@@ -24,6 +25,7 @@ dict_data = {'BTCUSDT': [],
              'BTCRUB': [],
              'BTCDOGE': []}
 
+# binance, coinmarket, bybit, gateio, kucoin парсим данные
 async def  binance(client:aiohttp.ClientSession):
     for coin in coins_to:
         url_rec = f"https://api.binance.com/api/v3/ticker/price?symbol={main_coin_from}{coin}"
@@ -38,10 +40,10 @@ async def  binance(client:aiohttp.ClientSession):
                     text = await res.json()
                     dict_data[f"BTC{coin}"].append(1/float((text["price"])))
 
-async def  coinmarket(client:aiohttp.ClientSession):
+async def  coinmarket(client:aiohttp.ClientSession, key:str):
     for coin in coins_to:
         url_rec = f"https://pro-api.coinmarketcap.com/v2/tools/price-conversion?amount=1&id=1&convert={coin}"
-        headers = {'Accepts': 'application/json', 'X-CMC_PRO_API_KEY': '503072fd-20f8-46f9-8b0c-427ad0b0e5b5',}
+        headers = {'Accepts': 'application/json', 'X-CMC_PRO_API_KEY': key,}
         async with client.get(url_rec, headers=headers) as res:
             text = await res.json()
             dict_data[f"BTC{coin}"].append(float(text['data']['quote'][coin]['price']))
@@ -90,38 +92,53 @@ async def kucoin(client:aiohttp.ClientSession):
             text = await res.json()
             dict_data[f"BTC{coin[:-5]}"].append(1/float(text['data']['price'])*exchange_rate)
 
+# call update_price and select data from table
+async def update_currencies():
+    async with session.begin():
+        with open('log.txt', 'w') as f:
+            for elem in coins_to:
+                dict_data[f"BTC{elem}"] = max(dict_data[f"BTC{elem}"])
+            for key in dict_data.keys():
+                res = await session.execute(select(Coins).where(Coins.title == key))
+                coins = res.scalars().first()
+                data = await update_price(key, dict_data[key], dict_data[key] * 3, coins)
+                if data:
+                    log_to_csv(coins)
+                    f.write(str(data))
+            for elem in coins_to:
+                dict_data[f"BTC{elem}"] = []
+        try:
+            with open('log.txt', 'r') as f:
+                if len(f.read()) > 5:
+                    for email in email_list:
+                        send_email(email, 'log.txt')
+        except FileNotFoundError:
+            return 1
+
+
+
 async def do_tasks():
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(15)) as client:
-        tasks = [binance(client), coinmarket(client), bybit(client), gateio(client), kucoin(client)]
+        tasks = [binance(client), coinmarket(client, X_CMC_PRO_API_KEY), bybit(client), gateio(client), kucoin(client)]
         return await asyncio.gather(*tasks)
+
+async def do_tasks_update():
+    tasks = [update_currencies()]
+    return await asyncio.gather(*tasks)
+
 
 
 def main_program():
     asyncio.run(do_tasks())
-    with open('log.txt', 'w') as f:
-        for elem in coins_to:
-            dict_data[f"BTC{elem}"] = max(dict_data[f"BTC{elem}"])
-        print(dict_data)
-        for key in dict_data.keys():
-            data = asyncio.run(update_price(key, dict_data[key], dict_data[key]*3))
-            if data:
-                f.write(str(data))
-            log_to_csv(key)
-        for elem in coins_to:
-            dict_data[f"BTC{elem}"] = []
-    try:
-        with open('log.txt', 'r') as f:
-            if len(f.read())>5:
-                send_email('alisa.gusina03@gmail.com', 'log.txt')
-    except FileNotFoundError:
-        return 1
+    asyncio.run(do_tasks_update())
 
 
-
-schedule.every(10).seconds.do(main_program)
+# schedule to application
+schedule.every(3).seconds.do(main_program)
 
 app = FastAPI()
 
+# schema for HTTP requests
 class BaseView(BaseModel):
     title: Optional[str]
     price: Optional[float]
@@ -151,12 +168,12 @@ async def get_currencies() -> List[BaseView]:
     return base_views
 
 #GET-запрос для получения данных конкретной валютной пары
-@app.get("/currency/{title}", response_model=List[BaseView])
-async def get_currency(title: str) -> List[BaseView]:
+@app.get("/currency/{title}", response_model=BaseView)
+async def get_currency(title: str) ->BaseView:
     async with session.begin():
         res = await session.execute(select(Coins).where(Coins.title == title))
-    coins = res.scalars().all()
-    base_views = [BaseView(**jsonable_encoder(coin)) for coin in coins]
+    coins = res.scalars().first()
+    base_views = BaseView(**jsonable_encoder(coins))
     return base_views
 
 
@@ -165,14 +182,14 @@ async def get_currency(title: str) -> List[BaseView]:
 @app.patch("/currency/{title}", response_model=BaseView)
 async def update_currency(title: str, coin: BaseView):
     # Получение данных о валютной паре с помощью GET-запроса
-    async with async_session() as session:
-        stmt = select(Coins).where(Coins.title == title)
-        currency = await session.execute(stmt).first()
+    async with session.begin():
+        res = await session.execute(select(Coins).where(Coins.title == title))
+        currency = res.scalars().first()
     if currency is None:
         raise HTTPException(status_code=404, detail="Валютная пара не найдена")
     # Изменение нужных полей в данных
     if coin.price:
-        update_price(title, BaseView.price, BaseView.price*3)
+        await update_price(title, BaseView.price, BaseView.price*3, coin)
     if coin.title:
         currency.title = BaseView.title
 
@@ -184,16 +201,15 @@ async def update_currency(title: str, coin: BaseView):
 @app.delete("/currency/{title}", response_model=BaseView)
 async def delete_currency(title: str):
     # Получение данных о валютной паре с помощью GET-запроса
-    async with async_session() as session:
-        stmt = select(Coins).where(Coins.title == title)
-        currency = await session.execute(stmt).first()
+    async with session.begin():
+        res = await session.execute(select(Coins).where(Coins.title == title))
+        currency = res.scalars().first()
     if currency is None:
         raise HTTPException(status_code=404, detail="Валютная пара не найдена")
 
     # Удаление данных валютной пары
-    async with async_session() as session:
-        stmt = delete(Coins).where(Coins.title == title)
-        await session.execute(stmt)
+    async with session.begin():
+        res = await session.delete(currency)
         await session.commit()
 
     return {"message": "Данные успешно удалены"}
