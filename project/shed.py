@@ -2,6 +2,7 @@ import asyncio
 import aiohttp
 import schedule
 from model import update_price, Base, engine, log_to_csv
+from mail import send_email
 
 savings = 3
 main_coin_from = 'BTC'
@@ -89,14 +90,24 @@ async def do_tasks():
 
 def main_program():
     asyncio.run(do_tasks())
-    for elem in coins_to:
-        dict_data[f"BTC{elem}"] = max(dict_data[f"BTC{elem}"])
-    print(dict_data)
-    for key in dict_data.keys():
-        update_price(key, dict_data[key], dict_data[key]*3)
-        log_to_csv(key)
-    for elem in coins_to:
-        dict_data[f"BTC{elem}"] = []
+    with open('log.txt', 'w') as f:
+        for elem in coins_to:
+            dict_data[f"BTC{elem}"] = max(dict_data[f"BTC{elem}"])
+        print(dict_data)
+        for key in dict_data.keys():
+            data = update_price(key, dict_data[key], dict_data[key]*3)
+            if data:
+                f.write(data)
+            log_to_csv(key)
+        for elem in coins_to:
+            dict_data[f"BTC{elem}"] = []
+    try:
+        with open('log.txt', 'r') as f:
+            if len(f.read())>5:
+                send_email('alisa.gusina03@gmail.com', 'log.txt')
+    except FileNotFoundError:
+        return 1
+
 
 
 schedule.every(10).seconds.do(main_program)

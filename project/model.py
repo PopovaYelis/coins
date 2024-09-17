@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from flask import Flask, jsonify
 from typing import Dict, Any
 import csv
-from mail import send_email
+
 
 
 app = Flask(__name__)
@@ -80,25 +80,19 @@ def get_currency_data_json(title: str):
 def update_price(title: str, new_price: float, total_amount: float):
     # Ищем запись с таким же заголовком (названием валютной пары)
     data =  session.query(Coins).filter(Coins.title == title).one_or_none()
-
+    res = ''
 
     if data:
         difference = new_price - data.price
         if new_price >= data.min_price + data.min_price * 0.00003:
             data.price = new_price
             res = get_currency_data_json(data.title)
-            with open('log.json', 'w') as f:
-                f.write(f"{json.loads(res.encode())}")
-            send_email('alisa.gusina03@gmail.com', 'log.json')
             data.min_price = new_price
         # Обновляем максимальную и минимальную цены, если нужно
         if new_price > data.max_price:
             data.max_price = new_price
         if new_price < data.min_price:
             data.min_price = new_price
-
-
-
 
         #Обновляем текущую цену и другие поля
         data.difference = difference
@@ -124,10 +118,8 @@ def update_price(title: str, new_price: float, total_amount: float):
         ]
         session.bulk_save_objects(objects)
         session.commit()
-
-
-
-
+    if len(res) > 1:
+        return f"{json.loads(res.encode())}"
 
 # from tortoise import Tortoise, fields, models, run_async
 # from typing import Dict, Any
