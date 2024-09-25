@@ -1,15 +1,33 @@
-name: Production Deployment
+name: Python package
+
 on:
   push:
-    branches: [main]
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
 jobs:
-
-  converge:
-    name: Converge
+  build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.6]
     steps:
-
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    - uses: actions/checkout@v2
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python-version }}
+    # You can test your matrix by printing the current Python version
+    - name: Display Python version
+      run: python -c "import sys; print(sys.version)"
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements_dev.txt
+    - name: Run black
+      run:
+        black --check .
+    - name: Run flake8
+      run: flake8
+    - name: Run Mypy
+      run: mypy pandaseda
